@@ -1,0 +1,26 @@
+---
+all:
+  children:
+    # Группа для проксирующего Nginx (vm-2)
+    proxy_servers:
+      hosts:
+        proxy-vm:
+          ansible_host: 93.77.180.228
+          ansible_user: fizik
+
+    # Группа для отдающего Nginx (vm-1 и vm-3)
+    web_servers:
+      hosts:
+        web-vm-1:
+          ansible_host: 93.77.187.242
+          ansible_user: fizik
+        web-vm-2:
+          ansible_host: 93.77.184.134
+          ansible_user: fizik
+
+  vars:
+    ansible_ssh_private_key_file: "/home/fizik/.ssh/id_ed25519"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+    ansible_become: true
+    ansible_become_method: sudo
+    ansible_python_interpreter: /usr/bin/python3

@@ -1,0 +1,308 @@
+---
+# РОЛЬ 1: Настройка ВМ (изменение имени и установка пакетов)
+- name: "РОЛЬ 1: Настройка ВМ - изменение имени машины и установка стандартных пакетов"
+  hosts: all
+  become: true
+
+  tasks:
+    # Изменение имени машины
+    - name: "1.1 - Изменение hostname"
+      hostname:
+        name: "{{ inventory_hostname }}"
+
+    # Обновление /etc/hosts для корректного резолвинга
+    - name: "1.2 - Обновление /etc/hosts"
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1 {{ inventory_hostname }}"
+        state: present
+
+    # Исправление проблем с apt (удаление проблемного backports)
+    - name: "1.3 - Исправление apt репозиториев"
+      shell: |
+        sed -i '/backports/d' /etc/apt/sources.list
+        rm -f /etc/apt/sources.list.d/*backports* 2>/dev/null || true
+      ignore_errors: yes
+      changed_when: false
+
+    # Обновление кэша apt
+    - name: "1.4 - Обновление apt cache"
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    # Установка стандартных пакетов
+    - name: "1.5 - Установка стандартных пакетов"
+      apt:
+        name:
+          - net-tools      # сетевые утилиты (ifconfig, netstat)
+          - dnsutils       # DNS утилиты (nslookup, dig)
+          - wget           # загрузка файлов
+          - curl           # HTTP-клиент
+          - mc             # Midnight Commander
+          - rsync          # синхронизация файлов
+        state: present
+
+    # Вывод информации о выполненной настройке
+    - name: "1.6 - Информация о настройке ВМ"
+      debug:
+        msg:
+          - "========================================="
+          - "✅ ВМ {{ ansible_hostname }} настроена"
+          - "📦 Установлены пакеты: net-tools, dnsutils, wget, curl, mc, rsync"
+          - "========================================="
+
+# РОЛЬ 2: Отдающий Nginx (веб-серверы)
+- name: "РОЛЬ 2: Настройка отдающего Nginx - страница Hello from <имя машины>"
+  hosts: web_servers
+  become: true
+
+  tasks:
+    # Установка Nginx
+    - name: "2.1 - Установка Nginx"
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    # Запуск и автозагрузка Nginx
+    - name: "2.2 - Запуск и включение Nginx"
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    # Создание директории для сайта
+    - name: "2.3 - Создание директории сайта"
+      file:
+        path: /var/www/hello
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    # Создание страницы с использованием Magic Variable
+    # Magic Variables: ansible_hostname, group_names
+    - name: "2.4 - Создание страницы Hello from <имя машины>!"
+      copy:
+        content: |
+          <!DOCTYPE html>
+          <html lang="ru">
+          <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Hello from {{ ansible_hostname }}</title>
+              <style>
+                  body {
+                      font-family: 'Arial', sans-serif;
+                      text-align: center;
+                      padding: 50px;
+                      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                      color: white;
+                      margin: 0;
+                      height: 100vh;
+                      display: flex;
+                      justify-content: center;
+                      align-items: center;
+                  }
+                  .container {
+                      background: rgba(255, 255, 255, 0.1);
+                      border-radius: 20px;
+                      padding: 40px;
+                      backdrop-filter: blur(10px);
+                      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+                  }
+                  h1 {
+                      font-size: 3em;
+                      margin-bottom: 20px;
+                  }
+                  .info {
+                      margin-top: 30px;
+                      font-size: 1.2em;
+                      border-top: 1px solid rgba(255,255,255,0.3);
+                      padding-top: 20px;
+                  }
+                  .magic {
+                      color: #ffd700;
+                      font-weight: bold;
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <!-- Использование Magic Variable ansible_hostname -->
+                  <h1>Hello from {{ ansible_hostname }}!</h1>
+                  <div class="info">
+                      <p>✨ Использованы Magic Variables Ansible ✨</p>
+                      <!-- Использование Magic Variable group_names -->
+                      <p>👥 Группа: <span class="magic">{{ group_names | join(', ') }}</span>
+                      <p>🌐 IP адрес: {{ ansible_default_ipv4.address }}</p>
+                      <p>💻 ОС: {{ ansible_distribution }} {{ ansible_distribution_version }>
+                  </div>
+              </div>
+          </body>
+          </html>
+        dest: /var/www/hello/index.html
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    # Конфигурация Nginx
+    - name: "2.5 - Конфигурация Nginx"
+      copy:
+        content: |
+          server {
+              listen 80;
+              listen [::]:80;
+
+              server_name {{ ansible_hostname }};
+
+              root /var/www/hello;
+              index index.html;
+
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+
+              access_log /var/log/nginx/hello_access.log;
+              error_log /var/log/nginx/hello_error.log;
+          }
+        dest: /etc/nginx/sites-available/hello
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart_nginx
+
+    # Включение сайта
+    - name: "2.6 - Включение сайта"
+      file:
+        src: /etc/nginx/sites-available/hello
+        dest: /etc/nginx/sites-enabled/hello
+        state: link
+      notify: restart_nginx
+
+    # Удаление default сайта
+    - name: "2.7 - Удаление default сайта"
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart_nginx
+
+    # Вывод информации
+    - name: "2.8 - Информация о веб-сервере"
+      debug:
+        msg:
+          - "========================================="
+          - "✅ Отдающий Nginx настроен на {{ ansible_hostname }}"
+          - "📄 Страница: Hello from {{ ansible_hostname }}!"
+          - "🌐 Доступно по адресу: http://{{ ansible_default_ipv4.address }}"
+          - "========================================="
+
+  handlers:
+    - name: restart_nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+# РОЛЬ 3: Проксирующий Nginx (порт 3000 -> порт 80 веб-серверов)
+- name: "РОЛЬ 3: Настройка проксирующего Nginx - перенаправление с порта 3000 на порт 80"
+  hosts: proxy_servers
+  become: true
+
+  tasks:
+    # Установка Nginx
+    - name: "3.1 - Установка Nginx"
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    # Запуск и автозагрузка Nginx
+    - name: "3.2 - Запуск и включение Nginx"
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    # Получение IP адресов веб-серверов
+    - name: "3.3 - Получение IP адресов веб-серверов"
+      set_fact:
+        web_servers_ips: "{{ groups['web_servers'] | map('extract', hostvars) | map(attribut>
+
+    # Настройка проксирующего Nginx
+    - name: "3.4 - Конфигурация проксирующего Nginx"
+      copy:
+        content: |
+          upstream web_backend {
+              {% for ip in web_servers_ips %}
+              server {{ ip }}:80 weight=1 max_fails=3 fail_timeout=30s;
+              {% endfor %}
+          }
+
+          server {
+              listen 3000;
+              listen [::]:3000;
+
+              server_name {{ ansible_hostname }};
+
+              location / {
+                  proxy_pass http://web_backend;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+
+                  proxy_connect_timeout 60s;
+                  proxy_send_timeout 60s;
+                  proxy_read_timeout 60s;
+              }
+
+              location /health {
+                  access_log off;
+                  return 200 "healthy\n";
+                  add_header Content-Type text/plain;
+              }
+
+              access_log /var/log/nginx/proxy_access.log;
+              error_log /var/log/nginx/proxy_error.log;
+          }
+        dest: /etc/nginx/sites-available/proxy
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart_nginx
+
+    # Включение прокси
+    - name: "3.5 - Включение прокси"
+      file:
+        src: /etc/nginx/sites-available/proxy
+        dest: /etc/nginx/sites-enabled/proxy
+        state: link
+      notify: restart_nginx
+
+    # Удаление default сайта
+    - name: "3.6 - Удаление default сайта"
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart_nginx
+
+    # Вывод информации о прокси
+    - name: "3.7 - Информация о прокси-сервере"
+      debug:
+        msg:
+          - "========================================="
+          - "✅ Проксирующий Nginx настроен на {{ ansible_hostname }}"
+          - "🔄 Перенаправление: порт 3000 -> веб-серверы ({{ web_servers_ips | join(', ') }}>
+          - "🌐 Проверка: curl http://{{ ansible_default_ipv4.address }}:3000"
+          - "========================================="
+
+  handlers:
+    - name: restart_nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+
+
